@@ -652,6 +652,7 @@ def index():
 
 # ---------- Main ----------
 if __name__ == '__main__':
-    # On first run, create the database tables.
-    db.create_all()
+    with app.app_context():
+        db.create_all()
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+
