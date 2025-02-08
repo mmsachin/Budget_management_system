@@ -1,0 +1,1042 @@
+Below is **Step 1** in our step-by-step guide. Once you’ve reviewed this step, please let me know and we’ll continue with the next one.
+
+---
+
+## **Step 1: Requirements Analysis & Specification**
+
+### **1.1 Gather and Document All Functional Requirements**
+
+**A. Annual Operating Plans (AOPs)**
+- **Data Structure:**
+  - **Header:** Name, total approved amount, state (Draft, Active, EOL).
+  - **Details:** List of cost center allocations (each with cost center code and allocated amount).
+- **Lifecycle Rules:**
+  - New AOPs start in the **Draft** state.
+  - Transition rules: Draft → Active, EOL → Active.
+  - Only one AOP may be Active at any time.
+  - Active AOP budgets must not be exceeded by the sum of active budgets.
+- **Modification Constraints:**
+  - Once an AOP is Active, modifications aren’t allowed (except via an Adjusted Plan process).
+  - Any update to AOP details must auto-update the total approved amount.
+- **APIs:** CRUD endpoints to create, read, update, and delete AOPs.
+
+**B. Cost Centers**
+- **Data Structure:**
+  - Each cost center must have a unique code and a descriptive name.
+- **APIs:** CRUD endpoints for managing cost centers.
+
+**C. Employees & Organization Hierarchy**
+- **Data Structure:**
+  - Employee details: LDAP, first name, last name, email, level (1-12), associated cost center.
+  - Hierarchical structure: Each employee (except top-level) reports to a manager.
+- **Rules:**
+  - Only managers (employees with level > 1) can assign budgets to direct reports.
+- **APIs:** CRUD endpoints for employee management and hierarchical relationships.
+
+**D. Budget Management**
+- **Data Structure:**
+  - Budget entry includes: Project, description, amount, associated employee LDAP, link to an AOP, and state (Active/Inactive).
+- **Rules & Validations:**
+  - Total active budgets must not exceed the active AOP’s approved amount.
+  - Employees can request budgets for themselves; managers can allocate budgets for their team.
+  - Actual spending (tracked via purchase requests, orders, and receipts) must not exceed the budgeted amount.
+- **Tracking Actuals:**
+  - **Purchase Requests:** Reference, requestor, budget ID, amount, date.
+  - **Purchase Orders:** Order number, line number, requestor, budget ID, item, amount, date.
+  - **Receipts:** Receipt date, order number, line number, item.
+- **APIs:** CRUD endpoints for budgets and for managing purchase requests, orders, and receipts.
+
+**E. Budget Operations**
+- **Operations:**
+  - **Copy Budget:** Duplicate a budget to a different AOP (ensuring the destination AOP has sufficient unallocated funds).
+  - **Remove Budget:** Soft delete using a flag (cannot remove if actuals are linked).
+  - **Reconcile Budget:** Validate that the sum of active budgets complies with the AOP’s total.
+  - **Reduce Budget:** Ensure reductions do not fall below actual spend totals.
+
+**F. Chatbot User Experience**
+- **Interaction Examples:**
+  - **Adding a User:**  
+    - “Add user lsamuel” → Prompt for missing fields.
+    - “Add user lsamuel, first name Samuel, last name Larkins” → Further prompt for email, level, cost center.
+  - **Removing a User:**  
+    - Mark as inactive (with a check for active budget dependencies).
+  - **Reports and Charts:**  
+    - “Show budget chart for AOP-2025” → Display Pareto top 10 budgets.
+    - “Show my organization” → Display reporting hierarchy.
+    - “Show my budget” → Aggregate budgets for the user’s chain.
+  - **Non-Budget Queries:**  
+    - E.g., “What is the weather in San Francisco?” → Routed to an LLM-based service.
+- **APIs:** Endpoints to support chatbot interactions and command parsing.
+
+### **1.2 Identify Non-Functional Requirements**
+
+- **Scalability & Performance:**
+  - Optimized for up to 10 users concurrently and 1,000 budget lines.
+- **Cost Efficiency:**
+  - Use managed GCP services (Cloud Run/App Engine, Cloud SQL) to balance cost with performance.
+- **Security:**
+  - Simple token-based authentication (fixed token: “IKnowYou241202”).
+- **Maintainability:**
+  - Modular code structure for easy updates and testing.
+- **Deployment & CI/CD:**
+  - Use GitHub for version control.
+  - Implement GitHub Actions (or Cloud Build) to automate testing, security checks, and deployment to GCP.
+- **Logging & Monitoring:**
+  - Use Cloud Storage for logs.
+  - Consider GCP’s monitoring tools to track system health.
+
+### **1.3 Map Out Key Entities and Their Relationships**
+
+- **Entities:**
+  - **AOP:** Contains a header and multiple detail records (each detail ties a cost center to an allocated amount).
+  - **Cost Center:** Master data list.
+  - **Employee:** With attributes and hierarchical relationships.
+  - **Budget:** Linked to an AOP and an employee.
+  - **Purchase Request/Order/Receipt:** Linked to budgets and used for tracking actual spend.
+- **Relationships:**
+  - AOP ↔ Budget (one-to-many).
+  - Employee ↔ Budget (one-to-many; also depends on role: self-request vs. manager allocation).
+  - Employee hierarchy (recursive relationship with manager IDs).
+
+### **1.4 Finalize API & Integration Needs**
+
+- **APIs:** Define endpoints for each module (AOP, cost centers, employees, budgets, purchase tracking, chatbot commands).
+- **Integration Points:**
+  - **GCP Services:** Cloud SQL for database, Cloud Run/App Engine for backend, Cloud Storage for logs, and API Gateway for endpoint exposure.
+  - **CI/CD:** GitHub repository integrated with GitHub Actions/Cloud Build for automated deployments.
+
+---
+
+**Summary of Step 1:**  
+You now have a clear picture of the system’s requirements and the relationships among the key entities, along with the essential validations and business rules. This forms the foundation on which the architecture and design will be built.
+
+---
+
+                        
+
+## **Step 2: Architecture Design & Technology Selection**
+
+In this step, we outline the overall system architecture and select the technologies and GCP services to be used in each tier. This design is based on the requirements defined in Step 1.
+
+---
+
+### **2.1 Overall System Architecture**
+
+#### **Three-Tier Architecture Overview**
+
+1. **Presentation Layer (Frontend):**
+   - **User Interface:**  
+     A web-based chatbot accessible via the open internet.
+   - **Responsibilities:**  
+     - Accept and parse user commands (e.g., “Add user lsamuel”, “Show my budget”).
+     - Display responses and visualizations (charts, hierarchical views).
+     - Interact with the backend via RESTful API calls.
+   - **Technology Options:**  
+     - **Frameworks/Libraries:**  
+       - Modern JavaScript frameworks such as **React**, **Vue.js**, or **Angular**.
+       - Chatbot UI libraries or custom-built chatbot components.
+     - **Hosting:**  
+       - Static content hosted on **Google Cloud Storage** with Cloud CDN for efficient delivery.
+       - Alternatively, use **Firebase Hosting** if real-time capabilities are required.
+
+2. **Business Logic Layer (Backend):**
+   - **Core Responsibilities:**
+     - Implementing business rules for AOPs, cost centers, employee management, budgets, and actuals.
+     - Handling validation, workflows, and data integrity checks.
+     - Parsing chatbot commands and delegating tasks to proper APIs.
+   - **Technology Options:**  
+     - **Language:** Python or Java. (For this example, we’ll assume Python for its rapid development and ease of use.)
+     - **Framework:**  
+       - For Python, **Flask** or **FastAPI** are good choices. FastAPI is particularly attractive for its modern features and async support.
+       - For Java, frameworks like **Spring Boot** could be used.
+   - **Hosting Options on GCP:**  
+     - **Google Cloud Run:** Provides containerized deployment, scalability, and cost efficiency.
+     - **Google App Engine:** Offers a fully managed platform with auto-scaling.
+   - **API Gateway:**  
+     - Use **Google Cloud API Gateway** to expose REST endpoints securely to the internet.
+
+3. **Data Persistence Layer (Database):**
+   - **Core Responsibilities:**
+     - Store and manage all entities: AOPs, cost centers, employees, budgets, and transaction records.
+   - **Technology:**  
+     - **Cloud SQL for MySQL:**  
+       - Managed MySQL instance for relational data.
+       - Automatic backups, replication, and scaling as needed.
+     - **Schema Design Considerations:**
+       - Normalize tables to represent AOPs, cost centers, employees (with hierarchy), budgets, purchase requests, orders, and receipts.
+       - Include indexing on key columns for performance.
+
+---
+
+### **2.2 Detailed Technology Selections**
+
+#### **Presentation Layer**
+- **Frontend Framework:**  
+  - Choose **React** for its component-driven architecture and extensive ecosystem.
+- **Chatbot Integration:**  
+  - Use a dedicated chatbot library (e.g., **BotUI**, **Rasa UI**, or a custom solution) that can be embedded within the React application.
+- **Deployment:**  
+  - Host static files on **Google Cloud Storage** (with a bucket configured for public access) combined with **Cloud CDN** for improved performance.
+
+#### **Business Logic Layer**
+- **Programming Language:**  
+  - **Python** (for this guide; however, Java remains a viable alternative).
+- **Framework:**  
+  - **FastAPI** (or **Flask** if preferred) for building RESTful APIs.
+- **Authentication:**  
+  - Implement simple token-based authentication middleware that checks for the token `"IKnowYou241202"`.
+- **Containerization:**  
+  - Package the application in a **Docker** container for deployment.
+- **Hosting:**  
+  - Deploy the container on **Google Cloud Run** for scalability and cost-effectiveness.
+- **API Management:**  
+  - Front the backend APIs with **Google Cloud API Gateway** to manage endpoints, rate limiting, and security.
+
+#### **Data Persistence Layer**
+- **Database Engine:**  
+  - **Cloud SQL (MySQL):**
+    - Managed database service to host our relational database.
+    - Ensure proper network configuration (VPC connectors) for secure communication with Cloud Run/App Engine.
+- **Schema Management:**
+  - Use migration tools (e.g., **Alembic** for Python) to manage database schema evolution.
+- **Connection Management:**
+  - Implement connection pooling in the application to optimize database connections and manage load.
+
+#### **CI/CD Pipeline and Version Control**
+- **Version Control:**  
+  - **GitHub:** Host the codebase in a GitHub repository.
+- **CI/CD Pipeline Tools:**  
+  - **GitHub Actions:** Automate testing, container builds, and deployments.
+  - **Cloud Build:** An alternative or supplement for building container images and deploying to Cloud Run.
+- **Deployment Workflow:**
+  - **On Push to Main/Master Branch:**  
+    - Run automated tests.
+    - Build the Docker container.
+    - Deploy to the appropriate GCP environment (Cloud Run or App Engine).
+- **Security & Testing:**
+  - Include static code analysis, unit tests, integration tests, and vulnerability scans within the CI/CD workflow.
+
+#### **Logging, Monitoring & Storage**
+- **Logging:**  
+  - Utilize **Google Cloud Logging** for centralized log management.
+- **Monitoring:**  
+  - Use **Google Cloud Monitoring (formerly Stackdriver)** to track application performance and health.
+- **File Storage:**
+  - Use **Google Cloud Storage** for logs, reports, and any other static files that may be needed.
+
+---
+
+### **2.3 Architecture Diagram Overview**
+
+While an actual diagram is best drawn using a tool like Lucidchart or Draw.io, here’s a textual outline of the architecture:
+
+```
+                         +---------------------------+
+                         |      User (Browser)       |
+                         +-------------+-------------+
+                                       |
+                                       | HTTPS Request (Chatbot UI)
+                                       |
+                         +-------------v-------------+
+                         |   Frontend (React App)    |
+                         | (Hosted on Cloud Storage) |
+                         +-------------+-------------+
+                                       |
+                                       | REST API Calls
+                                       |
+                         +-------------v-------------+
+                         |    API Gateway (GCP)      |
+                         +-------------+-------------+
+                                       |
+                                       | Authenticated Requests
+                                       |
+                         +-------------v-------------+
+                         |   Business Logic Layer    |
+                         | (Python/FastAPI on Cloud  |
+                         |        Run/App Engine)    |
+                         +-------------+-------------+
+                                       |
+                                       | SQL Queries
+                                       |
+                         +-------------v-------------+
+                         |  Data Persistence Layer   |
+                         |  (Cloud SQL - MySQL)      |
+                         +---------------------------+
+```
+
+---
+
+### **2.4 Summary of Design Choices**
+
+- **Frontend:**  
+  - React-based chatbot interface hosted on Cloud Storage with CDN.
+- **Backend:**  
+  - Python with FastAPI, containerized and deployed on Cloud Run (or App Engine).
+- **Database:**  
+  - Cloud SQL (MySQL) with proper schema design and connection pooling.
+- **APIs & Security:**  
+  - Exposed via API Gateway with a simple token-based authentication.
+- **CI/CD:**  
+  - Automated pipelines using GitHub Actions and/or Cloud Build.
+- **Monitoring & Logging:**  
+  - GCP-native services for logging and monitoring ensuring observability and quick troubleshooting.
+
+---
+
+This completes **Step 2**. We have now established our architectural layout and technology stack choices, ensuring our system is scalable, secure, and cost-efficient on GCP.
+
+Below is **Step 3: Detailed Component Design & Database Schema**. In this step, we break down the core components of the application and define the underlying database schema with all necessary entities, fields, and relationships.
+
+---
+
+## **3.1 Component Design Overview**
+
+### **A. Application Modules**
+
+1. **AOP (Annual Operating Plan) Module:**
+   - **Responsibilities:**
+     - CRUD operations for AOP headers and their details.
+     - Enforce lifecycle transitions (Draft → Active, EOL → Active) and ensure only one AOP is Active at any time.
+     - Auto-update the header’s total approved amount whenever detail records change.
+   - **Key Endpoints:**
+     - `POST /aops` – Create a new AOP (default state: Draft).
+     - `GET /aops/{id}` – Retrieve an AOP (with its detail records).
+     - `PUT /aops/{id}` – Update an AOP (with restrictions on state changes).
+     - `DELETE /aops/{id}` – Delete an AOP (subject to business rules).
+
+2. **Cost Center Module:**
+   - **Responsibilities:**
+     - Manage cost centers, ensuring unique codes and meaningful names.
+   - **Key Endpoints:**
+     - `POST /cost-centers` – Create a new cost center.
+     - `GET /cost-centers/{code}` – Retrieve cost center details.
+     - `PUT /cost-centers/{code}` – Update cost center details.
+     - `DELETE /cost-centers/{code}` – Delete a cost center.
+
+3. **Employee & Hierarchy Module:**
+   - **Responsibilities:**
+     - Handle CRUD operations for employees.
+     - Maintain the reporting hierarchy via a self-referential relationship.
+     - Enforce that only managers (employees with level > 1) can assign budgets.
+   - **Key Endpoints:**
+     - `POST /employees` – Create a new employee.
+     - `GET /employees/{id}` – Retrieve employee details (including manager/ direct reports information).
+     - `PUT /employees/{id}` – Update employee details.
+     - `DELETE /employees/{id}` – Mark an employee as inactive (with checks against active budget dependencies).
+
+4. **Budget Management Module:**
+   - **Responsibilities:**
+     - Manage budget entries linked to AOPs and employees.
+     - Enforce budget allocation rules (active budgets must not exceed the AOP’s approved total).
+     - Support operations like copying, soft deletion (flag-based removal), reconciliation, and reduction of budgets.
+   - **Key Endpoints:**
+     - `POST /budgets` – Create a new budget entry.
+     - `GET /budgets/{id}` – Retrieve a specific budget.
+     - `PUT /budgets/{id}` – Update a budget entry (subject to validations).
+     - `DELETE /budgets/{id}` – Soft delete a budget (if no actual spend is linked).
+     - **Operational Endpoints:**
+       - `POST /budgets/{id}/copy` – Copy a budget to another AOP.
+       - `POST /budgets/{id}/reconcile` – Trigger a reconciliation process.
+       - `POST /budgets/{id}/reduce` – Reduce a budget (ensuring not to go below the actuals).
+
+5. **Purchase Tracking Module:**
+   - **Responsibilities:**
+     - Record and manage actual spend through purchase requests, orders, and receipts.
+     - Ensure that actual spending does not exceed the allocated budget.
+   - **Key Endpoints:**
+     - **Purchase Requests:**
+       - `POST /purchase-requests` – Create a new purchase request.
+       - `GET /purchase-requests/{id}` – Retrieve details.
+     - **Purchase Orders:**
+       - `POST /purchase-orders` – Create a new purchase order.
+       - `GET /purchase-orders/{id}` – Retrieve details.
+     - **Receipts:**
+       - `POST /receipts` – Record a new receipt.
+       - `GET /receipts/{id}` – Retrieve receipt details.
+
+6. **Chatbot Command Parser:**
+   - **Responsibilities:**
+     - Interpret and parse natural language commands from the chatbot interface.
+     - Map commands to the appropriate API endpoints (e.g., “Add user lsamuel” triggers the employee creation flow).
+     - Provide guided prompts for missing information during multi-step interactions.
+   - **Implementation:**
+     - A dedicated module (or service) that leverages NLP libraries or structured command parsing.
+     - Routes commands to underlying services (employee, budget, AOP, etc.) based on keywords and patterns.
+
+7. **Authentication Middleware:**
+   - **Responsibilities:**
+     - Intercepts API requests to validate the simple token (`"IKnowYou241202"`).
+   - **Implementation:**
+     - A middleware component in the backend framework that checks request headers for the valid token before processing the request.
+
+8. **API Gateway Integration:**
+   - **Responsibilities:**
+     - Serve as the public-facing layer for all REST endpoints.
+     - Enforce rate limiting, logging, and secure access via the token-based authentication.
+   - **Implementation:**
+     - Leverage **Google Cloud API Gateway** for managing and exposing the backend services.
+
+---
+
+## **3.2 Database Schema Design**
+
+The following schema outlines the relational tables, their fields, relationships, and constraints.
+
+### **A. Table Definitions**
+
+#### **1. AOP & AOP Details**
+
+- **Table: `aop`**
+  - **Columns:**
+    - `aop_id` (INT, Primary Key, Auto-Increment)
+    - `name` (VARCHAR, Not Null)
+    - `total_approved_amount` (DECIMAL, Not Null)
+    - `state` (ENUM: `'Draft'`, `'Active'`, `'EOL'`; Not Null)
+    - `created_at` (TIMESTAMP, Default: CURRENT_TIMESTAMP)
+    - `updated_at` (TIMESTAMP, Default: CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)
+    
+- **Table: `aop_detail`**
+  - **Columns:**
+    - `aop_detail_id` (INT, Primary Key, Auto-Increment)
+    - `aop_id` (INT, Not Null, Foreign Key → `aop.aop_id`)
+    - `cost_center_code` (VARCHAR, Not Null, Foreign Key → `cost_center.code`)
+    - `allocated_amount` (DECIMAL, Not Null)
+  - **Constraints:**
+    - Foreign key constraint ensures that every detail is linked to a valid AOP and cost center.
+
+#### **2. Cost Center**
+
+- **Table: `cost_center`**
+  - **Columns:**
+    - `code` (VARCHAR, Primary Key)
+    - `name` (VARCHAR, Not Null)
+    - `created_at` (TIMESTAMP, Default: CURRENT_TIMESTAMP)
+    - `updated_at` (TIMESTAMP, Default: CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)
+
+#### **3. Employee**
+
+- **Table: `employee`**
+  - **Columns:**
+    - `employee_id` (INT, Primary Key, Auto-Increment)
+    - `ldap` (VARCHAR, Not Null, Unique)
+    - `first_name` (VARCHAR, Not Null)
+    - `last_name` (VARCHAR, Not Null)
+    - `email` (VARCHAR, Not Null)
+    - `level` (INT, Not Null, Check: `level` BETWEEN 1 AND 12)
+    - `cost_center_code` (VARCHAR, Not Null, Foreign Key → `cost_center.code`)
+    - `manager_id` (INT, Nullable, Foreign Key → `employee.employee_id`)
+    - `is_active` (BOOLEAN, Default: TRUE)
+    - `created_at` (TIMESTAMP, Default: CURRENT_TIMESTAMP)
+    - `updated_at` (TIMESTAMP, Default: CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)
+
+#### **4. Budget**
+
+- **Table: `budget`**
+  - **Columns:**
+    - `budget_id` (INT, Primary Key, Auto-Increment)
+    - `aop_id` (INT, Not Null, Foreign Key → `aop.aop_id`)
+    - `employee_id` (INT, Not Null, Foreign Key → `employee.employee_id`)
+    - `project` (VARCHAR, Not Null)
+    - `description` (TEXT)
+    - `amount` (DECIMAL, Not Null)
+    - `state` (ENUM: `'Active'`, `'Inactive'`; Not Null)
+    - `is_deleted` (BOOLEAN, Default: FALSE)  *(For soft deletes)*
+    - `created_at` (TIMESTAMP, Default: CURRENT_TIMESTAMP)
+    - `updated_at` (TIMESTAMP, Default: CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)
+  - **Business Rules:**
+    - Ensure that the sum of all active budget amounts for a given AOP does not exceed the AOP’s `total_approved_amount`.
+
+#### **5. Purchase Tracking**
+
+- **Table: `purchase_request`**
+  - **Columns:**
+    - `request_id` (INT, Primary Key, Auto-Increment)
+    - `budget_id` (INT, Not Null, Foreign Key → `budget.budget_id`)
+    - `reference` (VARCHAR, Not Null)
+    - `requestor_id` (INT, Not Null, Foreign Key → `employee.employee_id`)
+    - `amount` (DECIMAL, Not Null)
+    - `date` (TIMESTAMP, Not Null)
+    - `created_at` (TIMESTAMP, Default: CURRENT_TIMESTAMP)
+    - `updated_at` (TIMESTAMP, Default: CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)
+
+- **Table: `purchase_order`**
+  - **Columns:**
+    - `order_id` (INT, Primary Key, Auto-Increment)
+    - `budget_id` (INT, Not Null, Foreign Key → `budget.budget_id`)
+    - `order_number` (VARCHAR, Not Null)
+    - `line_number` (INT, Not Null)
+    - `requestor_id` (INT, Not Null, Foreign Key → `employee.employee_id`)
+    - `item` (VARCHAR, Not Null)
+    - `amount` (DECIMAL, Not Null)
+    - `date` (TIMESTAMP, Not Null)
+    - `created_at` (TIMESTAMP, Default: CURRENT_TIMESTAMP)
+    - `updated_at` (TIMESTAMP, Default: CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)
+
+- **Table: `receipt`**
+  - **Columns:**
+    - `receipt_id` (INT, Primary Key, Auto-Increment)
+    - `purchase_order_id` (INT, Not Null, Foreign Key → `purchase_order.order_id`)
+    - `receipt_date` (TIMESTAMP, Not Null)
+    - `item` (VARCHAR, Not Null)
+    - `created_at` (TIMESTAMP, Default: CURRENT_TIMESTAMP)
+    - `updated_at` (TIMESTAMP, Default: CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)
+
+---
+
+### **B. Entity Relationships**
+
+Below is a summary of key relationships between the tables:
+
+- **AOP Relationships:**
+  - **One-to-Many:**  
+    - One AOP (`aop`) can have multiple details (`aop_detail`).
+    - One AOP (`aop`) can have multiple budget entries (`budget`).
+
+- **Cost Center Relationships:**
+  - **One-to-Many:**  
+    - One cost center (`cost_center`) is referenced by many AOP details (`aop_detail`).
+    - One cost center is also linked to multiple employees (`employee`).
+
+- **Employee Relationships:**
+  - **Self-Referential:**  
+    - Each employee (except the top-level) can have a manager (`manager_id`), establishing a recursive hierarchy.
+  - **One-to-Many:**  
+    - One employee (if a manager) can be linked to many budget entries (for direct reports) via `budget.employee_id`.
+
+- **Budget & Purchase Tracking:**
+  - **One-to-Many:**  
+    - One budget (`budget`) can have multiple purchase requests (`purchase_request`) and purchase orders (`purchase_order`).
+    - One purchase order (`purchase_order`) can have multiple receipts (`receipt`).
+
+---
+
+## **3.3 Implementation Considerations**
+
+- **Validation & Business Logic in the Application Layer:**
+  - **State Transitions:**  
+    - Enforce that only one AOP can be active at any time.
+    - Prevent updates on active AOPs outside the Adjusted Plan process.
+  - **Budget Allocation:**  
+    - Before creating or updating a budget, check that the cumulative active budgets do not exceed the active AOP’s approved total.
+  - **Soft Delete Logic:**  
+    - The `is_deleted` flag in the `budget` table ensures that removed budgets are not physically deleted but excluded from operational queries—provided no actual spending is linked.
+  - **Actual Spend Constraints:**  
+    - Implement checks to ensure that any adjustments (such as budget reduction) do not cause the budgeted amount to fall below the total recorded actuals.
+
+- **Database Migrations & Versioning:**
+  - Use a migration tool (e.g., **Alembic** for Python) to manage schema changes over time.
+  - Maintain versioned scripts to allow rollbacks and ensure consistency across environments.
+
+---
+
+**Summary of Step 3:**
+
+- **Component Breakdown:**  
+  - The application is divided into modules for managing AOPs, cost centers, employees, budgets, purchase tracking, and chatbot interactions.
+  - Each module exposes RESTful endpoints with built-in validations and business rules.
+
+- **Database Schema:**  
+  - The schema is designed with clearly defined tables for each entity.
+  - Relationships, constraints, and business rules are enforced both at the database level (via foreign keys and check constraints) and in the application logic.
+
+---
+
+Below is **Step 4: API Design & Endpoint Specifications**. In this step, we will define the RESTful API endpoints for each module, describe their request/response formats, and outline important validations and error handling. Once you review these specifications, we can move on to the next step.
+
+---
+
+## **4.1 Common Considerations**
+
+### **Authentication & Headers**
+- **Token-Based Authentication:**  
+  All endpoints require a header with the token:  
+  ```
+  Authorization: Bearer IKnowYou241202
+  ```
+- **Content-Type:**  
+  JSON will be used for request and response bodies:
+  ```
+  Content-Type: application/json
+  ```
+
+### **Response Format**
+- **Success:**  
+  Return a JSON object with the relevant data and HTTP status codes (e.g., 200 OK, 201 Created).
+- **Error:**  
+  Return an error JSON with an `error` field, including a descriptive message and an appropriate HTTP status code (e.g., 400 Bad Request, 404 Not Found, 422 Unprocessable Entity).
+
+---
+
+## **4.2 AOP (Annual Operating Plan) Endpoints**
+
+### **1. Create a New AOP**
+- **Endpoint:** `POST /aops`
+- **Description:**  
+  Creates a new AOP with a header and (optionally) its detail records. The new AOP defaults to the state `Draft`.
+- **Request Body Example:**
+  ```json
+  {
+    "name": "AOP-2025",
+    "total_approved_amount": 1000000.00,
+    "details": [
+      { "cost_center_code": "CC101", "allocated_amount": 500000.00 },
+      { "cost_center_code": "CC102", "allocated_amount": 500000.00 }
+    ]
+  }
+  ```
+- **Response Example:**
+  ```json
+  {
+    "aop_id": 1,
+    "name": "AOP-2025",
+    "total_approved_amount": 1000000.00,
+    "state": "Draft",
+    "details": [
+      { "aop_detail_id": 1, "cost_center_code": "CC101", "allocated_amount": 500000.00 },
+      { "aop_detail_id": 2, "cost_center_code": "CC102", "allocated_amount": 500000.00 }
+    ],
+    "created_at": "2025-01-01T12:00:00Z"
+  }
+  ```
+
+### **2. Retrieve AOP Details**
+- **Endpoint:** `GET /aops/{aop_id}`
+- **Description:**  
+  Retrieves the AOP header along with its associated detail records.
+- **Response Example:**
+  ```json
+  {
+    "aop_id": 1,
+    "name": "AOP-2025",
+    "total_approved_amount": 1000000.00,
+    "state": "Draft",
+    "details": [
+      { "aop_detail_id": 1, "cost_center_code": "CC101", "allocated_amount": 500000.00 },
+      { "aop_detail_id": 2, "cost_center_code": "CC102", "allocated_amount": 500000.00 }
+    ],
+    "updated_at": "2025-01-01T12:00:00Z"
+  }
+  ```
+
+### **3. Update an AOP**
+- **Endpoint:** `PUT /aops/{aop_id}`
+- **Description:**  
+  Updates an AOP’s properties. Note: Only AOPs in the `Draft` state (or undergoing an Adjusted Plan process) are modifiable.
+- **Request Body Example:**
+  ```json
+  {
+    "name": "AOP-2025 Revised",
+    "details": [
+      { "aop_detail_id": 1, "cost_center_code": "CC101", "allocated_amount": 600000.00 },
+      { "aop_detail_id": 2, "cost_center_code": "CC102", "allocated_amount": 400000.00 }
+    ]
+  }
+  ```
+- **Validations:**
+  - Ensure the sum of detail amounts equals the updated total approved amount.
+  - Reject modifications if the AOP state is `Active` (unless using a specific adjusted plan endpoint).
+
+### **4. Change AOP State**
+- **Endpoint:** `POST /aops/{aop_id}/state`
+- **Description:**  
+  Transitions the state of an AOP. For example, to transition from `Draft` to `Active`.
+- **Request Body Example:**
+  ```json
+  {
+    "new_state": "Active"
+  }
+  ```
+- **Validations:**
+  - Only allow transitions from `Draft` or `EOL` to `Active`.
+  - Ensure no other AOP is already in `Active` state.
+  - Validate that active budget allocations do not exceed the AOP total.
+
+### **5. Delete an AOP**
+- **Endpoint:** `DELETE /aops/{aop_id}`
+- **Description:**  
+  Deletes an AOP if business rules allow (e.g., no active budgets are tied to it).  
+  _Note: This operation may be restricted or use soft deletion based on requirements._
+
+---
+
+## **4.3 Cost Center Endpoints**
+
+### **1. Create a Cost Center**
+- **Endpoint:** `POST /cost-centers`
+- **Request Body Example:**
+  ```json
+  {
+    "code": "CC101",
+    "name": "Marketing"
+  }
+  ```
+- **Response Example:**
+  ```json
+  {
+    "code": "CC101",
+    "name": "Marketing",
+    "created_at": "2025-01-01T12:00:00Z"
+  }
+  ```
+
+### **2. Retrieve a Cost Center**
+- **Endpoint:** `GET /cost-centers/{code}`
+- **Response Example:**
+  ```json
+  {
+    "code": "CC101",
+    "name": "Marketing",
+    "updated_at": "2025-01-01T12:00:00Z"
+  }
+  ```
+
+### **3. Update a Cost Center**
+- **Endpoint:** `PUT /cost-centers/{code}`
+- **Request Body Example:**
+  ```json
+  {
+    "name": "Digital Marketing"
+  }
+  ```
+
+### **4. Delete a Cost Center**
+- **Endpoint:** `DELETE /cost-centers/{code}`
+- **Description:**  
+  Removes a cost center, ensuring it is not referenced by any active AOP detail or employee record.
+
+---
+
+## **4.4 Employee & Hierarchy Endpoints**
+
+### **1. Create an Employee**
+- **Endpoint:** `POST /employees`
+- **Request Body Example:**
+  ```json
+  {
+    "ldap": "lsamuel",
+    "first_name": "Laura",
+    "last_name": "Samuel",
+    "email": "laura.samuel@example.com",
+    "level": 3,
+    "cost_center_code": "CC101",
+    "manager_id": 2  // Optional: If this employee reports to someone
+  }
+  ```
+- **Response Example:**
+  ```json
+  {
+    "employee_id": 5,
+    "ldap": "lsamuel",
+    "first_name": "Laura",
+    "last_name": "Samuel",
+    "email": "laura.samuel@example.com",
+    "level": 3,
+    "cost_center_code": "CC101",
+    "manager_id": 2,
+    "is_active": true,
+    "created_at": "2025-01-01T12:00:00Z"
+  }
+  ```
+
+### **2. Retrieve an Employee**
+- **Endpoint:** `GET /employees/{employee_id}`
+- **Description:**  
+  Returns employee details, including manager information and (optionally) a list of direct reports.
+- **Response Example:**
+  ```json
+  {
+    "employee_id": 5,
+    "ldap": "lsamuel",
+    "first_name": "Laura",
+    "last_name": "Samuel",
+    "email": "laura.samuel@example.com",
+    "level": 3,
+    "cost_center_code": "CC101",
+    "manager": { "employee_id": 2, "first_name": "John", "last_name": "Doe" },
+    "direct_reports": [
+      { "employee_id": 7, "first_name": "Alice", "last_name": "Smith" }
+    ],
+    "is_active": true
+  }
+  ```
+
+### **3. Update an Employee**
+- **Endpoint:** `PUT /employees/{employee_id}`
+- **Request Body Example:**
+  ```json
+  {
+    "first_name": "Laura",
+    "last_name": "Samuel",
+    "email": "laura.samuel@newdomain.com",
+    "level": 4,  // Updated level
+    "cost_center_code": "CC101",
+    "manager_id": 3  // Optionally reassign the manager
+  }
+  ```
+
+### **4. Delete (Deactivate) an Employee**
+- **Endpoint:** `DELETE /employees/{employee_id}`
+- **Description:**  
+  Marks the employee as inactive.  
+- **Validations:**  
+  Prevent deletion if the employee is tied to any active budget or is critical to the reporting hierarchy.
+
+---
+
+## **4.5 Budget Management Endpoints**
+
+### **1. Create a Budget Entry**
+- **Endpoint:** `POST /budgets`
+- **Request Body Example:**
+  ```json
+  {
+    "aop_id": 1,
+    "employee_id": 5,
+    "project": "Project Alpha",
+    "description": "Budget for Q1 initiatives",
+    "amount": 25000.00,
+    "state": "Active"
+  }
+  ```
+- **Validations:**
+  - Ensure cumulative active budgets under the associated AOP do not exceed its `total_approved_amount`.
+- **Response Example:**
+  ```json
+  {
+    "budget_id": 10,
+    "aop_id": 1,
+    "employee_id": 5,
+    "project": "Project Alpha",
+    "description": "Budget for Q1 initiatives",
+    "amount": 25000.00,
+    "state": "Active",
+    "is_deleted": false,
+    "created_at": "2025-01-02T10:00:00Z"
+  }
+  ```
+
+### **2. Retrieve a Budget Entry**
+- **Endpoint:** `GET /budgets/{budget_id}`
+- **Response Example:**
+  ```json
+  {
+    "budget_id": 10,
+    "aop_id": 1,
+    "employee_id": 5,
+    "project": "Project Alpha",
+    "description": "Budget for Q1 initiatives",
+    "amount": 25000.00,
+    "state": "Active",
+    "created_at": "2025-01-02T10:00:00Z"
+  }
+  ```
+
+### **3. Update a Budget Entry**
+- **Endpoint:** `PUT /budgets/{budget_id}`
+- **Request Body Example:**
+  ```json
+  {
+    "project": "Project Alpha Updated",
+    "description": "Updated description for Q1",
+    "amount": 26000.00
+  }
+  ```
+- **Validations:**
+  - Ensure the new amount does not cause the total active budgets for the AOP to exceed the approved limit.
+  - Prevent modifications if actual spending has been recorded beyond the proposed reduction.
+
+### **4. Soft Delete a Budget Entry**
+- **Endpoint:** `DELETE /budgets/{budget_id}`
+- **Description:**  
+  Marks the budget as deleted using the `is_deleted` flag.  
+- **Validations:**  
+  Reject deletion if active actuals (purchase requests/orders/receipts) exist for this budget.
+
+### **5. Copy a Budget to Another AOP**
+- **Endpoint:** `POST /budgets/{budget_id}/copy`
+- **Request Body Example:**
+  ```json
+  {
+    "destination_aop_id": 2
+  }
+  ```
+- **Description:**  
+  Creates a duplicate of the given budget entry under the specified AOP, generating a new unique `budget_id`.
+- **Validations:**  
+  Ensure the destination AOP has sufficient unallocated funds.
+
+### **6. Reconcile a Budget**
+- **Endpoint:** `POST /budgets/{budget_id}/reconcile`
+- **Description:**  
+  Compares the AOP’s total approved amount with the sum of active budgets and returns a reconciliation report.
+- **Response Example:**
+  ```json
+  {
+    "aop_id": 1,
+    "total_approved": 1000000.00,
+    "total_allocated": 950000.00,
+    "status": "Within Limits"
+  }
+  ```
+
+### **7. Reduce a Budget**
+- **Endpoint:** `POST /budgets/{budget_id}/reduce`
+- **Request Body Example:**
+  ```json
+  {
+    "new_amount": 24000.00
+  }
+  ```
+- **Validations:**  
+  Ensure that the new amount is not lower than the total actual spending already recorded against this budget.
+
+---
+
+## **4.6 Purchase Tracking Endpoints**
+
+### **Purchase Requests**
+
+#### **1. Create a Purchase Request**
+- **Endpoint:** `POST /purchase-requests`
+- **Request Body Example:**
+  ```json
+  {
+    "budget_id": 10,
+    "reference": "PR-2025-001",
+    "requestor_id": 5,
+    "amount": 5000.00,
+    "date": "2025-02-01T09:00:00Z"
+  }
+  ```
+- **Response Example:**
+  ```json
+  {
+    "request_id": 100,
+    "budget_id": 10,
+    "reference": "PR-2025-001",
+    "requestor_id": 5,
+    "amount": 5000.00,
+    "date": "2025-02-01T09:00:00Z"
+  }
+  ```
+
+#### **2. Retrieve a Purchase Request**
+- **Endpoint:** `GET /purchase-requests/{request_id}`
+- **Response:**  
+  Returns the details of the specified purchase request.
+
+---
+
+### **Purchase Orders**
+
+#### **1. Create a Purchase Order**
+- **Endpoint:** `POST /purchase-orders`
+- **Request Body Example:**
+  ```json
+  {
+    "budget_id": 10,
+    "order_number": "PO-2025-001",
+    "line_number": 1,
+    "requestor_id": 5,
+    "item": "Office Supplies",
+    "amount": 3000.00,
+    "date": "2025-02-02T11:00:00Z"
+  }
+  ```
+- **Response Example:**
+  ```json
+  {
+    "order_id": 200,
+    "budget_id": 10,
+    "order_number": "PO-2025-001",
+    "line_number": 1,
+    "requestor_id": 5,
+    "item": "Office Supplies",
+    "amount": 3000.00,
+    "date": "2025-02-02T11:00:00Z"
+  }
+  ```
+
+#### **2. Retrieve a Purchase Order**
+- **Endpoint:** `GET /purchase-orders/{order_id}`
+- **Response:**  
+  Returns the details of the specified purchase order.
+
+---
+
+### **Receipts**
+
+#### **1. Record a Receipt**
+- **Endpoint:** `POST /receipts`
+- **Request Body Example:**
+  ```json
+  {
+    "purchase_order_id": 200,
+    "receipt_date": "2025-02-03T15:00:00Z",
+    "item": "Office Supplies"
+  }
+  ```
+- **Response Example:**
+  ```json
+  {
+    "receipt_id": 300,
+    "purchase_order_id": 200,
+    "receipt_date": "2025-02-03T15:00:00Z",
+    "item": "Office Supplies"
+  }
+  ```
+
+#### **2. Retrieve a Receipt**
+- **Endpoint:** `GET /receipts/{receipt_id}`
+- **Response:**  
+  Returns the details of the specified receipt.
+
+---
+
+## **4.7 Chatbot Command Endpoint**
+
+### **1. Process Chatbot Command**
+- **Endpoint:** `POST /chatbot/command`
+- **Description:**  
+  Accepts a user command from the chatbot UI and routes the request to the appropriate internal service.
+- **Request Body Example:**
+  ```json
+  {
+    "user_id": "lsamuel",
+    "command": "Add user lsamuel, first name Laura, last name Samuel"
+  }
+  ```
+- **Processing:**  
+  - The chatbot service parses the command.
+  - If fields are missing, it returns a prompt asking for additional information.
+  - Once complete, it invokes the underlying API (e.g., `POST /employees` for adding a user).
+- **Response Example:**
+  ```json
+  {
+    "status": "success",
+    "message": "User lsamuel created successfully.",
+    "employee_id": 5
+  }
+  ```
+
+---
+
+## **4.8 Error Handling & Validation**
+
+- **Field Validation:**  
+  Each endpoint should validate input fields (e.g., required fields, data type checks, numeric ranges).
+- **Conflict Handling:**  
+  For operations like state transitions or budget updates, return a `409 Conflict` status if business rules are violated.
+- **Not Found:**  
+  Return a `404 Not Found` status when referencing non-existent resources.
+- **Authentication Errors:**  
+  Return a `401 Unauthorized` status if the token is missing or invalid.
+
+---
+
+**Summary of Step 4:**  
+We have defined a comprehensive set of API endpoints for managing AOPs, cost centers, employees, budgets, purchase tracking, and chatbot interactions. Each endpoint includes example requests and responses, along with key validations and error handling guidelines to enforce the business rules.
+
+---
+
+Would you like to proceed to **Step 5: CI/CD Pipeline & Deployment Setup**?
